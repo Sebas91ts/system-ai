@@ -9,11 +9,21 @@ class DiagramTask(BaseModel):
     id: str
     name: str
     area: str | None = None
+    type: str = "userTask"
 
 
 class DiagramFlow(BaseModel):
-    from_task: str
-    to_task: str
+    from_: str = Field(alias="from")
+    to: str
+    condition: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class DiagramGateway(BaseModel):
+    id: str
+    type: str = Field(pattern="^(exclusive|parallel|inclusive)$")
+    condition: str | None = None
 
 
 class DiagramArea(BaseModel):
@@ -21,6 +31,8 @@ class DiagramArea(BaseModel):
 
 
 class DiagramResponse(BaseModel):
+    processName: str
     tasks: list[DiagramTask]
+    gateways: list[DiagramGateway] = Field(default_factory=list)
     flows: list[DiagramFlow]
-    areas: list[DiagramArea]
+    areas: list[str] = Field(default_factory=list)

@@ -1,32 +1,16 @@
 from functools import lru_cache
+import time
 
 from core.config import get_settings
 
 
 class GeminiService:
-    _SYSTEM_PROMPT = (
-        "Eres el asistente interno de un Sistema BPM colaborativo. "
-        "Ayudas a usuarios a usar la plataforma. Responde de forma concreta, guiada y orientada a acciones dentro del sistema. "
-        "No des teoría general salvo que el usuario la pida. "
-        "Responde siempre en español, breve y accionable. "
-        "El sistema tiene un editor BPMN para crear y editar procesos, colaboración en tiempo real, autosave, versionado, "
-        "publicación con Camunda, áreas y lanes, tareas por área, formularios dinámicos, archivos adjuntos, historial de tareas, "
-        "dashboard administrativo, tracking visual de instancias y notificaciones en vivo. "
-        "Las secciones y rutas visibles de la aplicación incluyen: auth/login, auth/register, admin, admin/users, admin/areas, "
-        "admin/process-instances, user, processes, processes/families/:processKey, processes/designer/:id, processes/:id/monitor, "
-        "tasks, tasks/:id y process-instances/:id/tracking. "
-        "Los términos que el usuario ve en pantalla incluyen: Procesos, Bandeja de tareas, Mis tareas, Tareas de mi area, "
-        "Seguimiento de instancia, Dashboard BPM, Ver seguimiento, Publicar, Iniciar proceso, Tomar tarea, Completar formulario, "
-        "Historial, Archivos, Areas, Usuarios, Versiones, Rascunho/Draft, Publicado y Monitorear ciclo. "
-        "Cuando explique acciones, usa el lenguaje de la app: crear proceso, editar diagrama BPMN, asignar area a lane, "
-        "guardar, publicar, iniciar instancia, tomar tarea, completar formulario, subir archivo, revisar historial, ver tracking, "
-        "y revisar dashboard. "
-        "Si el usuario pide algo que el sistema no soporta todavía, dilo claramente sin inventar funcionalidades."
-    )
-
     def __init__(self) -> None:
         settings = get_settings()
         self._model_name = settings.gemini_model
+        self._fallback_models = [
+            model for model in settings.gemini_model_fallbacks if model and model != self._model_name
+        ]
 
         if not settings.gemini_api_key:
             raise ValueError("GEMINI_API_KEY no está configurada.")
@@ -41,24 +25,69 @@ class GeminiService:
         self._client = genai.Client(api_key=settings.gemini_api_key)
 
     def generate_text(self, prompt: str) -> str:
-        full_prompt = (
-            f"{self._SYSTEM_PROMPT}\n\n"
-            "Reglas de respuesta:\n"
-            "- Responde con pasos concretos dentro de la plataforma.\n"
-            "- Si aplica, menciona la ruta o seccion exacta de la app.\n"
-            "- Si la accion depende de rol, aclaralo (ADMIN o USER).\n"
-            "- No menciones APIs internas ni detalles de infraestructura salvo que el usuario los pida.\n"
-            "- Si algo no existe aun en el sistema, dilo sin inventar.\n\n"
-            f"Usuario: {prompt.strip()}\nRespuesta:"
-        )
+        return self.generate_text_with_attempts(prompt)[0]
+
+    def generate_text_with_attempts(self, prompt: str) -> tuple[str, int]:
+        candidates = [self._model_name, *self._fallback_models]
+        last_exception: Exception | None = None
+
+        for attempt, model_name in enumerate(candidates, start=1):
+            try:
+                return self._generate_once(prompt, model_name), attempt
+            except Exception as exc:
+                last_exception = exc
+                if self._is_retryable_quota_error(exc):
+                    time.sleep(self._retry_delay_seconds(exc))
+                    try:
+                        return self._generate_once(prompt, model_name), attempt
+                    except Exception as retry_exc:
+                        last_exception = retry_exc
+                        continue
+
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("No se pudo generar texto con Gemini.")
+
+    def _generate_once(self, prompt: str, model_name: str) -> str:
         response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=full_prompt,
+            model=model_name,
+            contents=prompt,
         )
         text = getattr(response, "text", None)
         if not text:
             raise ValueError("Gemini no devolvió texto.")
         return text.strip()
+
+    def _is_retryable_quota_error(self, exc: Exception) -> bool:
+        error_name = exc.__class__.__name__
+        message = str(exc).lower()
+        return error_name in {"ServerError", "ClientError"} and (
+            "503" in message
+            or "429" in message
+            or "unavailable" in message
+            or "high demand" in message
+            or "resource_exhausted" in message
+            or "quota exceeded" in message
+        )
+
+    def _retry_delay_seconds(self, exc: Exception) -> float:
+        message = str(exc).lower()
+        marker = "retry in "
+        if marker in message:
+            fragment = message.split(marker, 1)[1]
+            digits: list[str] = []
+            for char in fragment:
+                if char.isdigit() or char == ".":
+                    digits.append(char)
+                else:
+                    break
+            try:
+                value = float("".join(digits))
+                if value > 0:
+                    return min(value, 5.0)
+            except ValueError:
+                pass
+        return 1.5
 
 
 @lru_cache

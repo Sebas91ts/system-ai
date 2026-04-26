@@ -1,19 +1,19 @@
 from fastapi import APIRouter, HTTPException
 
-from core.dependencies import get_gemini_service
 from schemas.assistant_schema import AssistantRequest, AssistantResponse
+from services.assistant_service import AssistantService
 from utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+service = AssistantService()
 
 
 @router.post("/assistant", response_model=AssistantResponse)
 async def assistant(payload: AssistantRequest) -> AssistantResponse:
     logger.info("Request received at /ai/assistant")
     try:
-        service = get_gemini_service()
-        response = service.generate_text(payload.message)
+        response = service.answer(payload.message)
         logger.info("Assistant response generated successfully")
         return AssistantResponse(response=response)
     except Exception as exc:
