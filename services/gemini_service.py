@@ -23,10 +23,10 @@ class GeminiService:
 
         self._client_factory = genai.Client
 
-    def generate_text(self, prompt: str) -> str:
-        return self.generate_text_with_attempts(prompt)[0]
+    def generate_text(self, prompt: str, config: Any | None = None) -> str:
+        return self.generate_text_with_attempts(prompt, config=config)[0]
 
-    def generate_text_with_attempts(self, prompt: str) -> tuple[str, int]:
+    def generate_text_with_attempts(self, prompt: str, config: Any | None = None) -> tuple[str, int]:
         candidates = [self._model_name, *self._fallback_models]
         api_key = self._api_keys[0]
         masked_key = self._mask_api_key(api_key)
@@ -37,7 +37,7 @@ class GeminiService:
                 print(
                     f"[GeminiService] Intento con key {masked_key} y modelo '{model_name}'"
                 )
-                return self._generate_once(client, prompt, model_name), attempt
+                return self._generate_once(client, prompt, model_name, config=config), attempt
             except Exception as exc:
                 print(
                     f"[GeminiService] Fallo con key {masked_key} y modelo '{model_name}': "
@@ -48,14 +48,18 @@ class GeminiService:
 
         raise RuntimeError("No se pudo generar texto con Gemini.")
 
-    def _generate_once(self, client: Any, prompt: str, model_name: str) -> str:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
+    def _generate_once(self, client: Any, prompt: str, model_name: str, config: Any | None = None) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "contents": prompt,
+        }
+        if config is not None:
+            kwargs["config"] = config
+
+        response = client.models.generate_content(**kwargs)
         text = getattr(response, "text", None)
         if not text:
-            raise ValueError("Gemini no devolvió texto.")
+            raise ValueError("Gemini no devolvio texto.")
         return text.strip()
 
     def _is_resource_exhausted_error(self, exc: Exception) -> bool:
@@ -75,6 +79,7 @@ class GeminiService:
             return "***"
 
         return f"{api_key[:4]}...{api_key[-4:]}"
+
 
 @lru_cache
 def get_default_gemini_service() -> GeminiService:

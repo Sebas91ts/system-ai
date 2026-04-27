@@ -29,6 +29,7 @@ class ProcessAnalysisSuggestion(BaseModel):
     impact: str
     relatedElementId: str | None = None
     canBeAppliedAutomatically: bool = False
+    proposedXml: str | None = None
 
 
 class ProcessAnalysisResponse(BaseModel):

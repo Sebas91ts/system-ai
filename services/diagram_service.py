@@ -2,6 +2,8 @@ import json
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from google.genai import types
+
 from schemas.diagram_schema import DiagramResponse
 from services.gemini_service import GeminiService
 from utils.logger import get_logger
@@ -12,6 +14,13 @@ logger = get_logger(__name__)
 class DiagramService:
     def __init__(self, gemini_service: GeminiService | None = None) -> None:
         self._gemini_service = gemini_service or GeminiService()
+        self._generation_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_json_schema=DiagramResponse.model_json_schema(),
+            max_output_tokens=4096,
+            temperature=0.2,
+            top_p=0.8,
+        )
 
     def generate_structure(self, text: str) -> DiagramResponse:
         prompt = (
@@ -45,7 +54,7 @@ class DiagramService:
             f"Texto: {text.strip()}"
         )
 
-        raw_response = self._gemini_service.generate_text(prompt)
+        raw_response = self._gemini_service.generate_text(prompt, config=self._generation_config)
         logger.info("Gemini diagram response received: %s", raw_response[:200])
         payload = self._parse_json(raw_response)
         self._validate_payload(payload)
